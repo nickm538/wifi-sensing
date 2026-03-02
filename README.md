@@ -1,2 +1,2 @@
 # wifi-sensing
-wifi sense spooky
+Didnt even know this was possible but okay here we are lol.
