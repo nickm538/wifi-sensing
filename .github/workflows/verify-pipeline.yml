@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ['3.11']
+        python-version: ['3.11.14']
 
     steps:
       - name: Checkout repository
@@ -41,15 +41,14 @@ jobs:
 
       - name: Verify reference signal is reproducible
         run: |
-          echo "=== Regenerating reference signal ==="
-          python v1/data/proof/generate_reference_signal.py
+          echo "=== Regenerating reference signal into temp directory ==="
+          TMP_PROOF_DIR=$(mktemp -d)
+          python v1/data/proof/generate_reference_signal.py --output-dir "$TMP_PROOF_DIR"
           echo ""
-          echo "=== Checking data file matches committed version ==="
-          # The regenerated file should be identical to the committed one
-          # (We compare the metadata file since data file is large)
+          echo "=== Checking generated metadata invariants ==="
           python -c "
-          import json, hashlib
-          with open('v1/data/proof/sample_csi_meta.json') as f:
+          import json
+          with open('${TMP_PROOF_DIR}/sample_csi_meta.json') as f:
               meta = json.load(f)
           assert meta['is_synthetic'] == True, 'Metadata must mark signal as synthetic'
           assert meta['numpy_seed'] == 42, 'Seed must be 42'

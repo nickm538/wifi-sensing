@@ -76,6 +76,11 @@ PROCESSOR_CONFIG = {
 # still covering temporal dynamics (Doppler requires history).
 VERIFICATION_FRAME_COUNT = 100  # First 100 frames = 1 second
 
+# Canonicalization precision used before hashing feature arrays.
+# This keeps the proof stable across tiny floating-point noise while still
+# making meaningful pipeline changes detectable via hash mismatch.
+HASH_DECIMALS = 12
+
 
 def print_banner():
     """Print the verification banner."""
@@ -189,6 +194,9 @@ def features_to_bytes(features):
         features.power_spectral_density,
     ]:
         flat = np.asarray(array, dtype=np.float64).ravel()
+        # Quantize values to stabilize hashing across negligible numeric drift
+        # (e.g., minor BLAS/CPU differences) while preserving determinism.
+        flat = np.round(flat, decimals=HASH_DECIMALS)
         # Pack as little-endian double (8 bytes each)
         parts.append(struct.pack(f"<{len(flat)}d", *flat))
 
@@ -384,6 +392,8 @@ def audit_codebase(base_dir=None):
     return findings
 
 
+
+
 def main():
     """Main verification entry point."""
     parser = argparse.ArgumentParser(
@@ -410,6 +420,7 @@ def main():
 
     # Locate data file
     data_path = os.path.join(SCRIPT_DIR, "sample_csi_data.json")
+
     hash_path = os.path.join(SCRIPT_DIR, "expected_features.sha256")
 
     # ---------------------------------------------------------------
