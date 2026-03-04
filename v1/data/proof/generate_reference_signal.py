@@ -41,9 +41,9 @@ Output:
 Author: WiFi-DensePose Project (synthetic test data)
 """
 
+import argparse
 import json
 import os
-import sys
 
 import numpy as np
 
@@ -286,8 +286,18 @@ def save_data(frames, params, output_dir):
 
 def main():
     """Main entry point."""
-    # Determine output directory
-    output_dir = os.path.dirname(os.path.abspath(__file__))
+    parser = argparse.ArgumentParser(
+        description="Generate deterministic synthetic CSI reference signal"
+    )
+    parser.add_argument(
+        "--output-dir",
+        default=os.path.dirname(os.path.abspath(__file__)),
+        help="Directory to write sample_csi_data.json and sample_csi_meta.json",
+    )
+    args = parser.parse_args()
+
+    output_dir = os.path.abspath(args.output_dir)
+    os.makedirs(output_dir, exist_ok=True)
 
     print("=" * 70)
     print("WiFi-DensePose: Deterministic Reference CSI Signal Generator")
