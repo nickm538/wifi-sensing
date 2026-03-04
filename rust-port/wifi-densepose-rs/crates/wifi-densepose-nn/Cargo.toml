@@ -12,7 +12,7 @@ description = "Neural network inference for WiFi-DensePose pose estimation"
 readme = "README.md"
 
 [features]
-default = ["onnx"]
+default = []
 onnx = ["ort"]
 tch-backend = ["tch"]
 candle-backend = ["candle-core", "candle-nn"]

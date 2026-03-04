@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from functools import lru_cache
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 
 
 class ZoneType(str, Enum):
@@ -175,7 +175,8 @@ class PoseModelConfig(BaseModel):
     gpu_memory_fraction: float = Field(default=0.5, description="GPU memory fraction")
     num_threads: int = Field(default=4, description="Number of CPU threads")
     
-    @validator("confidence_threshold", "nms_threshold", "gpu_memory_fraction")
+    @field_validator("confidence_threshold", "nms_threshold", "gpu_memory_fraction")
+    @classmethod
     def validate_thresholds(cls, v):
         """Validate threshold values."""
         if not 0.0 <= v <= 1.0:
@@ -208,14 +209,16 @@ class StreamingConfig(BaseModel):
     min_confidence: float = Field(default=0.5, description="Minimum confidence for streaming")
     include_metadata: bool = Field(default=True, description="Include metadata in stream")
     
-    @validator("fps")
+    @field_validator("fps")
+    @classmethod
     def validate_fps(cls, v):
         """Validate FPS value."""
         if not 1 <= v <= 60:
             raise ValueError("FPS must be between 1 and 60")
         return v
-    
-    @validator("compression_level")
+
+    @field_validator("compression_level")
+    @classmethod
     def validate_compression_level(cls, v):
         """Validate compression level."""
         if not 1 <= v <= 9:
@@ -417,11 +420,11 @@ class DomainConfig:
                 for router_id, router in self.routers.items()
             },
             "pose_models": {
-                model_name: model.dict()
+                model_name: model.model_dump()
                 for model_name, model in self.pose_models.items()
             },
-            "streaming": self.streaming.dict(),
-            "alerts": self.alerts.dict()
+            "streaming": self.streaming.model_dump(),
+            "alerts": self.alerts.model_dump()
         }
 
 

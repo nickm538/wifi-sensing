@@ -1,264 +1,295 @@
 import pytest
+import asyncio
 import numpy as np
 import torch
-from unittest.mock import Mock, patch, MagicMock
-from src.hardware.csi_extractor import CSIExtractor, CSIExtractionError
+from unittest.mock import Mock, patch, MagicMock, AsyncMock
+from src.hardware.csi_extractor import (
+    CSIExtractor,
+    CSIExtractionError,
+    CSIParseError,
+    CSIValidationError,
+    CSIData,
+    ESP32CSIParser,
+    RouterCSIParser,
+)
+from datetime import datetime, timezone
 
 
 class TestCSIExtractor:
     """Test suite for CSI Extractor following London School TDD principles"""
-    
+
     @pytest.fixture
     def mock_config(self):
         """Configuration for CSI extractor"""
         return {
-            'interface': 'wlan0',
-            'channel': 6,
-            'bandwidth': 20,
-            'sample_rate': 1000,
+            'hardware_type': 'router',
+            'sampling_rate': 1000,
             'buffer_size': 1024,
-            'extraction_timeout': 5.0
+            'timeout': 5.0,
         }
-    
+
     @pytest.fixture
-    def mock_router_interface(self):
-        """Mock router interface for testing"""
-        mock_router = Mock()
-        mock_router.is_connected = True
-        mock_router.execute_command = Mock()
-        return mock_router
-    
+    def mock_logger(self):
+        """Mock logger for testing"""
+        return Mock()
+
     @pytest.fixture
-    def csi_extractor(self, mock_config, mock_router_interface):
+    def csi_extractor(self, mock_config, mock_logger):
         """Create CSI extractor instance for testing"""
-        return CSIExtractor(mock_config, mock_router_interface)
-    
+        return CSIExtractor(mock_config, logger=mock_logger)
+
     @pytest.fixture
     def mock_csi_data(self):
         """Generate synthetic CSI data for testing"""
-        # Simulate CSI data: complex values for multiple subcarriers
-        num_subcarriers = 56
-        num_antennas = 3
-        amplitude = np.random.uniform(0.1, 2.0, (num_antennas, num_subcarriers))
-        phase = np.random.uniform(-np.pi, np.pi, (num_antennas, num_subcarriers))
-        return amplitude * np.exp(1j * phase)
-    
-    def test_extractor_initialization_creates_correct_configuration(self, mock_config, mock_router_interface):
+        return CSIData(
+            timestamp=datetime.now(timezone.utc),
+            amplitude=np.random.uniform(0.1, 2.0, (3, 56)),
+            phase=np.random.uniform(-np.pi, np.pi, (3, 56)),
+            frequency=2.4e9,
+            bandwidth=20e6,
+            num_subcarriers=56,
+            num_antennas=3,
+            snr=15.5,
+            metadata={'source': 'router'}
+        )
+
+    def test_extractor_initialization_creates_correct_configuration(self, mock_config, mock_logger):
         """Test that CSI extractor initializes with correct configuration"""
         # Act
-        extractor = CSIExtractor(mock_config, mock_router_interface)
-        
+        extractor = CSIExtractor(mock_config, logger=mock_logger)
+
         # Assert
         assert extractor is not None
-        assert extractor.interface == mock_config['interface']
-        assert extractor.channel == mock_config['channel']
-        assert extractor.bandwidth == mock_config['bandwidth']
-        assert extractor.sample_rate == mock_config['sample_rate']
+        assert extractor.config == mock_config
+        assert extractor.hardware_type == mock_config['hardware_type']
+        assert extractor.sampling_rate == mock_config['sampling_rate']
         assert extractor.buffer_size == mock_config['buffer_size']
-        assert extractor.extraction_timeout == mock_config['extraction_timeout']
-        assert extractor.router_interface == mock_router_interface
-        assert not extractor.is_extracting
-    
-    def test_start_extraction_configures_monitor_mode(self, csi_extractor, mock_router_interface):
-        """Test that start_extraction configures monitor mode"""
-        # Arrange
-        mock_router_interface.enable_monitor_mode.return_value = True
-        mock_router_interface.execute_command.return_value = "CSI extraction started"
-        
-        # Act
-        result = csi_extractor.start_extraction()
-        
-        # Assert
-        assert result is True
-        assert csi_extractor.is_extracting is True
-        mock_router_interface.enable_monitor_mode.assert_called_once_with(csi_extractor.interface)
-    
-    def test_start_extraction_handles_monitor_mode_failure(self, csi_extractor, mock_router_interface):
-        """Test that start_extraction handles monitor mode configuration failure"""
-        # Arrange
-        mock_router_interface.enable_monitor_mode.return_value = False
-        
-        # Act & Assert
-        with pytest.raises(CSIExtractionError):
-            csi_extractor.start_extraction()
-        
-        assert csi_extractor.is_extracting is False
-    
-    def test_stop_extraction_disables_monitor_mode(self, csi_extractor, mock_router_interface):
-        """Test that stop_extraction disables monitor mode"""
-        # Arrange
-        mock_router_interface.enable_monitor_mode.return_value = True
-        mock_router_interface.disable_monitor_mode.return_value = True
-        mock_router_interface.execute_command.return_value = "CSI extraction started"
-        
-        csi_extractor.start_extraction()
-        
-        # Act
-        result = csi_extractor.stop_extraction()
-        
-        # Assert
-        assert result is True
-        assert csi_extractor.is_extracting is False
-        mock_router_interface.disable_monitor_mode.assert_called_once_with(csi_extractor.interface)
-    
-    def test_extract_csi_data_returns_valid_format(self, csi_extractor, mock_router_interface, mock_csi_data):
-        """Test that extract_csi_data returns data in valid format"""
-        # Arrange
-        mock_router_interface.enable_monitor_mode.return_value = True
-        mock_router_interface.execute_command.return_value = "CSI extraction started"
-        
-        # Mock the CSI data extraction
-        with patch.object(csi_extractor, '_parse_csi_output', return_value=mock_csi_data):
-            csi_extractor.start_extraction()
-            
-            # Act
-            csi_data = csi_extractor.extract_csi_data()
-        
-        # Assert
-        assert csi_data is not None
-        assert isinstance(csi_data, np.ndarray)
-        assert csi_data.dtype == np.complex128
-        assert csi_data.shape == mock_csi_data.shape
-    
-    def test_extract_csi_data_requires_active_extraction(self, csi_extractor):
-        """Test that extract_csi_data requires active extraction"""
-        # Act & Assert
-        with pytest.raises(CSIExtractionError):
-            csi_extractor.extract_csi_data()
-    
-    def test_extract_csi_data_handles_timeout(self, csi_extractor, mock_router_interface):
-        """Test that extract_csi_data handles extraction timeout"""
-        # Arrange
-        mock_router_interface.enable_monitor_mode.return_value = True
-        mock_router_interface.execute_command.side_effect = [
-            "CSI extraction started",
-            Exception("Timeout")
-        ]
-        
-        csi_extractor.start_extraction()
-        
-        # Act & Assert
-        with pytest.raises(CSIExtractionError):
-            csi_extractor.extract_csi_data()
-    
-    def test_convert_to_tensor_produces_correct_format(self, csi_extractor, mock_csi_data):
-        """Test that convert_to_tensor produces correctly formatted tensor"""
-        # Act
-        tensor = csi_extractor.convert_to_tensor(mock_csi_data)
-        
-        # Assert
-        assert isinstance(tensor, torch.Tensor)
-        assert tensor.dtype == torch.float32
-        assert tensor.shape[0] == mock_csi_data.shape[0] * 2  # Real and imaginary parts
-        assert tensor.shape[1] == mock_csi_data.shape[1]
-    
-    def test_convert_to_tensor_handles_invalid_input(self, csi_extractor):
-        """Test that convert_to_tensor handles invalid input"""
-        # Arrange
-        invalid_data = "not an array"
-        
-        # Act & Assert
-        with pytest.raises(ValueError):
-            csi_extractor.convert_to_tensor(invalid_data)
-    
-    def test_get_extraction_stats_returns_valid_statistics(self, csi_extractor, mock_router_interface):
-        """Test that get_extraction_stats returns valid statistics"""
-        # Arrange
-        mock_router_interface.enable_monitor_mode.return_value = True
-        mock_router_interface.execute_command.return_value = "CSI extraction started"
-        
-        csi_extractor.start_extraction()
-        
-        # Act
-        stats = csi_extractor.get_extraction_stats()
-        
-        # Assert
-        assert stats is not None
-        assert isinstance(stats, dict)
-        assert 'samples_extracted' in stats
-        assert 'extraction_rate' in stats
-        assert 'buffer_utilization' in stats
-        assert 'last_extraction_time' in stats
-    
-    def test_set_channel_configures_wifi_channel(self, csi_extractor, mock_router_interface):
-        """Test that set_channel configures WiFi channel"""
-        # Arrange
-        new_channel = 11
-        mock_router_interface.execute_command.return_value = f"Channel set to {new_channel}"
-        
-        # Act
-        result = csi_extractor.set_channel(new_channel)
-        
-        # Assert
-        assert result is True
-        assert csi_extractor.channel == new_channel
-        mock_router_interface.execute_command.assert_called()
-    
-    def test_set_channel_validates_channel_range(self, csi_extractor):
-        """Test that set_channel validates channel range"""
-        # Act & Assert
-        with pytest.raises(ValueError):
-            csi_extractor.set_channel(0)  # Invalid channel
-        
-        with pytest.raises(ValueError):
-            csi_extractor.set_channel(15)  # Invalid channel
-    
-    def test_extractor_supports_context_manager(self, csi_extractor, mock_router_interface):
-        """Test that CSI extractor supports context manager protocol"""
-        # Arrange
-        mock_router_interface.enable_monitor_mode.return_value = True
-        mock_router_interface.disable_monitor_mode.return_value = True
-        mock_router_interface.execute_command.return_value = "CSI extraction started"
-        
-        # Act
-        with csi_extractor as extractor:
-            # Assert
-            assert extractor.is_extracting is True
-        
-        # Assert - extraction should be stopped after context
-        assert csi_extractor.is_extracting is False
-    
-    def test_extractor_validates_configuration(self, mock_router_interface):
-        """Test that CSI extractor validates configuration parameters"""
-        # Arrange
-        invalid_config = {
-            'interface': '',  # Invalid interface
-            'channel': 6,
-            'bandwidth': 20
+        assert extractor.timeout == mock_config['timeout']
+        assert not extractor.is_connected
+
+    def test_extractor_creates_router_parser_for_router_type(self, mock_config, mock_logger):
+        """Test that router parser is created for hardware_type='router'"""
+        extractor = CSIExtractor(mock_config, logger=mock_logger)
+        assert isinstance(extractor.parser, RouterCSIParser)
+
+    def test_extractor_creates_esp32_parser_for_esp32_type(self, mock_logger):
+        """Test that ESP32 parser is created for hardware_type='esp32'"""
+        config = {
+            'hardware_type': 'esp32',
+            'sampling_rate': 100,
+            'buffer_size': 512,
+            'timeout': 5.0,
         }
-        
+        extractor = CSIExtractor(config, logger=mock_logger)
+        assert isinstance(extractor.parser, ESP32CSIParser)
+
+    @pytest.mark.asyncio
+    async def test_connect_establishes_hardware_connection(self, csi_extractor):
+        """Test that connect establishes hardware connection"""
+        # Arrange
+        with patch.object(csi_extractor, '_establish_hardware_connection', new_callable=AsyncMock) as mock_connect:
+            mock_connect.return_value = True
+
+            # Act
+            result = await csi_extractor.connect()
+
+            # Assert
+            assert result is True
+            assert csi_extractor.is_connected is True
+            mock_connect.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_connect_handles_hardware_failure(self, csi_extractor):
+        """Test that connect handles hardware connection failure"""
+        # Arrange
+        with patch.object(csi_extractor, '_establish_hardware_connection', new_callable=AsyncMock) as mock_connect:
+            mock_connect.side_effect = ConnectionError("Hardware not found")
+
+            # Act
+            result = await csi_extractor.connect()
+
+            # Assert
+            assert result is False
+            assert csi_extractor.is_connected is False
+
+    @pytest.mark.asyncio
+    async def test_disconnect_closes_hardware_connection(self, csi_extractor):
+        """Test that disconnect closes hardware connection"""
+        # Arrange
+        csi_extractor.is_connected = True
+
+        with patch.object(csi_extractor, '_close_hardware_connection', new_callable=AsyncMock) as mock_close:
+            # Act
+            await csi_extractor.disconnect()
+
+            # Assert
+            assert csi_extractor.is_connected is False
+            mock_close.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_extract_csi_returns_valid_csi_data(self, csi_extractor, mock_csi_data):
+        """Test that extract_csi returns valid CSI data"""
+        # Arrange
+        csi_extractor.is_connected = True
+
+        with patch.object(csi_extractor, '_read_raw_data', new_callable=AsyncMock) as mock_read:
+            with patch.object(csi_extractor.parser, 'parse', return_value=mock_csi_data):
+                mock_read.return_value = b"raw_csi_data"
+
+                # Act
+                result = await csi_extractor.extract_csi()
+
+                # Assert
+                assert result is not None
+                assert isinstance(result, CSIData)
+                assert result == mock_csi_data
+
+    @pytest.mark.asyncio
+    async def test_extract_csi_requires_active_connection(self, csi_extractor):
+        """Test that extract_csi requires active connection"""
+        # Arrange
+        csi_extractor.is_connected = False
+
+        # Act & Assert
+        with pytest.raises(CSIParseError, match="Not connected to hardware"):
+            await csi_extractor.extract_csi()
+
+    @pytest.mark.asyncio
+    async def test_extract_csi_handles_timeout(self, csi_extractor, mock_csi_data):
+        """Test that extract_csi handles extraction failures after retries"""
+        # Arrange
+        csi_extractor.is_connected = True
+        csi_extractor.retry_attempts = 1
+
+        with patch.object(csi_extractor, '_read_raw_data', new_callable=AsyncMock) as mock_read:
+            mock_read.side_effect = ConnectionError("Connection lost")
+
+            # Act & Assert
+            with pytest.raises(CSIParseError, match="Extraction failed after"):
+                await csi_extractor.extract_csi()
+
+    def test_validate_csi_data_accepts_valid_data(self, csi_extractor, mock_csi_data):
+        """Test that validate_csi_data accepts valid CSI data"""
+        # Act
+        result = csi_extractor.validate_csi_data(mock_csi_data)
+
+        # Assert
+        assert result is True
+
+    def test_validate_csi_data_rejects_empty_amplitude(self, csi_extractor):
+        """Test that validate_csi_data rejects empty amplitude"""
+        invalid_data = CSIData(
+            timestamp=datetime.now(timezone.utc),
+            amplitude=np.array([]),
+            phase=np.random.rand(3, 56),
+            frequency=2.4e9,
+            bandwidth=20e6,
+            num_subcarriers=56,
+            num_antennas=3,
+            snr=15.5,
+            metadata={}
+        )
+        with pytest.raises(CSIValidationError, match="Empty amplitude data"):
+            csi_extractor.validate_csi_data(invalid_data)
+
+    def test_validate_csi_data_rejects_invalid_frequency(self, csi_extractor):
+        """Test that validate_csi_data rejects invalid frequency"""
+        invalid_data = CSIData(
+            timestamp=datetime.now(timezone.utc),
+            amplitude=np.random.rand(3, 56),
+            phase=np.random.rand(3, 56),
+            frequency=0,
+            bandwidth=20e6,
+            num_subcarriers=56,
+            num_antennas=3,
+            snr=15.5,
+            metadata={}
+        )
+        with pytest.raises(CSIValidationError, match="Invalid frequency"):
+            csi_extractor.validate_csi_data(invalid_data)
+
+    @pytest.mark.asyncio
+    async def test_start_streaming_calls_callback(self, csi_extractor, mock_csi_data):
+        """Test that start_streaming calls the callback with CSI data"""
+        # Arrange
+        csi_extractor.is_connected = True
+        callback = Mock()
+
+        with patch.object(csi_extractor, 'extract_csi', new_callable=AsyncMock) as mock_extract:
+            mock_extract.return_value = mock_csi_data
+
+            # Start streaming and stop it after brief run
+            streaming_task = asyncio.create_task(csi_extractor.start_streaming(callback))
+            await asyncio.sleep(0.05)
+            csi_extractor.stop_streaming()
+            await streaming_task
+
+            callback.assert_called()
+
+    def test_stop_streaming_sets_flag_to_false(self, csi_extractor):
+        """Test that stop_streaming sets is_streaming to False"""
+        # Arrange
+        csi_extractor.is_streaming = True
+
+        # Act
+        csi_extractor.stop_streaming()
+
+        # Assert
+        assert csi_extractor.is_streaming is False
+
+    def test_extractor_validates_configuration_missing_fields(self, mock_logger):
+        """Test that CSI extractor validates required configuration parameters"""
+        # Arrange — missing required fields
+        invalid_config = {
+            'interface': '',
+            'channel': 6,
+            'bandwidth': 20,
+        }
+
         # Act & Assert
         with pytest.raises(ValueError):
-            CSIExtractor(invalid_config, mock_router_interface)
-    
-    def test_parse_csi_output_processes_raw_data(self, csi_extractor):
-        """Test that _parse_csi_output processes raw CSI data correctly"""
+            CSIExtractor(invalid_config, logger=mock_logger)
+
+    def test_extractor_validates_positive_sampling_rate(self, mock_logger):
+        """Test that CSI extractor rejects non-positive sampling_rate"""
+        invalid_config = {
+            'hardware_type': 'esp32',
+            'sampling_rate': -1,
+            'buffer_size': 1024,
+            'timeout': 5.0,
+        }
+        with pytest.raises(ValueError, match="sampling_rate must be positive"):
+            CSIExtractor(invalid_config, logger=mock_logger)
+
+    def test_extractor_raises_for_unsupported_hardware(self, mock_logger):
+        """Test that CSI extractor raises for unsupported hardware type"""
+        invalid_config = {
+            'hardware_type': 'unsupported_device',
+            'sampling_rate': 100,
+            'buffer_size': 1024,
+            'timeout': 5.0,
+        }
+        with pytest.raises(ValueError, match="Unsupported hardware type"):
+            CSIExtractor(invalid_config, logger=mock_logger)
+
+    @pytest.mark.asyncio
+    async def test_extract_csi_implements_retry_on_connection_error(self, csi_extractor, mock_csi_data):
+        """Test that extract_csi implements retry logic for ConnectionError failures"""
         # Arrange
-        raw_output = "CSI_DATA: 1.5+0.5j,2.0-1.0j,0.8+1.2j"
-        
-        # Act
-        parsed_data = csi_extractor._parse_csi_output(raw_output)
-        
-        # Assert
-        assert parsed_data is not None
-        assert isinstance(parsed_data, np.ndarray)
-        assert parsed_data.dtype == np.complex128
-    
-    def test_buffer_management_handles_overflow(self, csi_extractor, mock_router_interface, mock_csi_data):
-        """Test that buffer management handles overflow correctly"""
-        # Arrange
-        mock_router_interface.enable_monitor_mode.return_value = True
-        mock_router_interface.execute_command.return_value = "CSI extraction started"
-        
-        with patch.object(csi_extractor, '_parse_csi_output', return_value=mock_csi_data):
-            csi_extractor.start_extraction()
-            
-            # Fill buffer beyond capacity
-            for _ in range(csi_extractor.buffer_size + 10):
-                csi_extractor._add_to_buffer(mock_csi_data)
-            
-            # Act
-            stats = csi_extractor.get_extraction_stats()
-        
-        # Assert
-        assert stats['buffer_utilization'] <= 1.0  # Should not exceed 100%
+        csi_extractor.is_connected = True
+
+        with patch.object(csi_extractor, '_read_raw_data', new_callable=AsyncMock) as mock_read:
+            with patch.object(csi_extractor.parser, 'parse', return_value=mock_csi_data):
+                # Fail twice, succeed on third
+                mock_read.side_effect = [
+                    ConnectionError("Temp failure"),
+                    ConnectionError("Temp failure"),
+                    b"raw_data",
+                ]
+
+                # Act
+                result = await csi_extractor.extract_csi()
+
+                # Assert
+                assert result == mock_csi_data
+                assert mock_read.call_count == 3
