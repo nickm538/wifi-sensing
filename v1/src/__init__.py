@@ -29,7 +29,7 @@ Author: WiFi-DensePose Team
 License: MIT
 """
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 __author__ = "WiFi-DensePose Team"
 __email__ = "team@wifi-densepose.com"
 __license__ = "MIT"
@@ -53,7 +53,6 @@ try:
     # Core components
     from src.core.csi_processor import CSIProcessor
     from src.core.phase_sanitizer import PhaseSanitizer
-    from src.core.pose_estimator import PoseEstimator
     from src.core.router_interface import RouterInterface
     
     # Services
@@ -78,8 +77,7 @@ try:
         
         # Core processing
         'CSIProcessor',
-        'PhaseSanitizer', 
-        'PoseEstimator',
+        'PhaseSanitizer',
         'RouterInterface',
         
         # Services

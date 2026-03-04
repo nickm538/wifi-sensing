@@ -145,16 +145,20 @@ class TestRouterInterface:
     async def test_should_connect_successfully(self, router_interface):
         """Should establish SSH connection successfully."""
         mock_ssh_client = Mock()
-        
-        with patch('src.hardware.router_interface.asyncssh.connect', new_callable=AsyncMock) as mock_connect:
-            mock_connect.return_value = mock_ssh_client
-            
+
+        # Patch asyncssh on the loaded module object directly, since the module
+        # was loaded via importlib and the dotted patch path cannot walk the
+        # src.hardware package hierarchy at collection time.
+        mock_asyncssh = MagicMock()
+        mock_asyncssh.connect = AsyncMock(return_value=mock_ssh_client)
+
+        with patch.object(router_module, 'asyncssh', mock_asyncssh):
             result = await router_interface.connect()
-            
+
             assert result == True
             assert router_interface.is_connected == True
             assert router_interface.ssh_client == mock_ssh_client
-            mock_connect.assert_called_once_with(
+            mock_asyncssh.connect.assert_called_once_with(
                 '192.168.1.1',
                 port=22,
                 username='admin',

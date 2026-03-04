@@ -307,7 +307,7 @@ async def start_streaming(
     try:
         logger.info(f"Starting streaming service by user: {current_user['id']}")
         
-        if await stream_service.is_active():
+        if stream_service.is_active:
             return JSONResponse(
                 status_code=200,
                 content={"message": "Streaming service is already active"}

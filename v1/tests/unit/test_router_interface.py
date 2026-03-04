@@ -1,244 +1,247 @@
 import pytest
+import asyncio
 import numpy as np
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch, MagicMock, AsyncMock
 from src.hardware.router_interface import RouterInterface, RouterConnectionError
 
 
 class TestRouterInterface:
     """Test suite for Router Interface following London School TDD principles"""
-    
+
     @pytest.fixture
     def mock_config(self):
         """Configuration for router interface"""
         return {
-            'router_ip': '192.168.1.1',
+            'host': '192.168.1.1',
+            'port': 22,
             'username': 'admin',
             'password': 'password',
-            'ssh_port': 22,
-            'timeout': 30,
-            'max_retries': 3
+            'command_timeout': 30,
+            'connection_timeout': 10,
+            'max_retries': 3,
+            'retry_delay': 0.0,
         }
-    
+
     @pytest.fixture
-    def router_interface(self, mock_config):
+    def mock_logger(self):
+        """Mock logger for testing"""
+        return Mock()
+
+    @pytest.fixture
+    def router_interface(self, mock_config, mock_logger):
         """Create router interface instance for testing"""
-        return RouterInterface(mock_config)
-    
+        return RouterInterface(mock_config, logger=mock_logger)
+
     @pytest.fixture
     def mock_ssh_client(self):
-        """Mock SSH client for testing"""
+        """Mock asyncssh SSH client for testing"""
         mock_client = Mock()
-        mock_client.connect = Mock()
-        mock_client.exec_command = Mock()
         mock_client.close = Mock()
         return mock_client
-    
-    def test_interface_initialization_creates_correct_configuration(self, mock_config):
+
+    def test_interface_initialization_creates_correct_configuration(self, mock_config, mock_logger):
         """Test that router interface initializes with correct configuration"""
         # Act
-        interface = RouterInterface(mock_config)
-        
+        interface = RouterInterface(mock_config, logger=mock_logger)
+
         # Assert
         assert interface is not None
-        assert interface.router_ip == mock_config['router_ip']
+        assert interface.host == mock_config['host']
+        assert interface.port == mock_config['port']
         assert interface.username == mock_config['username']
         assert interface.password == mock_config['password']
-        assert interface.ssh_port == mock_config['ssh_port']
-        assert interface.timeout == mock_config['timeout']
+        assert interface.command_timeout == mock_config['command_timeout']
+        assert interface.connection_timeout == mock_config['connection_timeout']
         assert interface.max_retries == mock_config['max_retries']
         assert not interface.is_connected
-    
-    @patch('paramiko.SSHClient')
-    def test_connect_establishes_ssh_connection(self, mock_ssh_class, router_interface, mock_ssh_client):
+
+    @pytest.mark.asyncio
+    async def test_connect_establishes_ssh_connection(self, router_interface, mock_ssh_client):
         """Test that connect method establishes SSH connection"""
         # Arrange
-        mock_ssh_class.return_value = mock_ssh_client
-        
-        # Act
-        result = router_interface.connect()
-        
-        # Assert
-        assert result is True
-        assert router_interface.is_connected is True
-        mock_ssh_client.set_missing_host_key_policy.assert_called_once()
-        mock_ssh_client.connect.assert_called_once_with(
-            hostname=router_interface.router_ip,
-            port=router_interface.ssh_port,
-            username=router_interface.username,
-            password=router_interface.password,
-            timeout=router_interface.timeout
-        )
-    
-    @patch('paramiko.SSHClient')
-    def test_connect_handles_connection_failure(self, mock_ssh_class, router_interface, mock_ssh_client):
+        with patch('src.hardware.router_interface.asyncssh.connect', new_callable=AsyncMock) as mock_connect:
+            mock_connect.return_value = mock_ssh_client
+
+            # Act
+            result = await router_interface.connect()
+
+            # Assert
+            assert result is True
+            assert router_interface.is_connected is True
+            assert router_interface.ssh_client == mock_ssh_client
+            mock_connect.assert_called_once_with(
+                router_interface.host,
+                port=router_interface.port,
+                username=router_interface.username,
+                password=router_interface.password,
+                connect_timeout=router_interface.connection_timeout
+            )
+
+    @pytest.mark.asyncio
+    async def test_connect_handles_connection_failure(self, router_interface):
         """Test that connect method handles connection failures gracefully"""
         # Arrange
-        mock_ssh_class.return_value = mock_ssh_client
-        mock_ssh_client.connect.side_effect = Exception("Connection failed")
-        
-        # Act & Assert
-        with pytest.raises(RouterConnectionError):
-            router_interface.connect()
-        
-        assert router_interface.is_connected is False
-    
-    @patch('paramiko.SSHClient')
-    def test_disconnect_closes_ssh_connection(self, mock_ssh_class, router_interface, mock_ssh_client):
+        with patch('src.hardware.router_interface.asyncssh.connect', new_callable=AsyncMock) as mock_connect:
+            mock_connect.side_effect = Exception("Connection failed")
+
+            # Act
+            result = await router_interface.connect()
+
+            # Assert
+            assert result is False
+            assert router_interface.is_connected is False
+
+    @pytest.mark.asyncio
+    async def test_disconnect_closes_ssh_connection(self, router_interface, mock_ssh_client):
         """Test that disconnect method closes SSH connection"""
         # Arrange
-        mock_ssh_class.return_value = mock_ssh_client
-        router_interface.connect()
-        
+        router_interface.is_connected = True
+        router_interface.ssh_client = mock_ssh_client
+
         # Act
-        router_interface.disconnect()
-        
+        await router_interface.disconnect()
+
         # Assert
         assert router_interface.is_connected is False
         mock_ssh_client.close.assert_called_once()
-    
-    @patch('paramiko.SSHClient')
-    def test_execute_command_runs_ssh_command(self, mock_ssh_class, router_interface, mock_ssh_client):
+
+    @pytest.mark.asyncio
+    async def test_execute_command_runs_ssh_command(self, router_interface, mock_ssh_client):
         """Test that execute_command runs SSH commands correctly"""
         # Arrange
-        mock_ssh_class.return_value = mock_ssh_client
-        mock_stdout = Mock()
-        mock_stdout.read.return_value = b"command output"
-        mock_stderr = Mock()
-        mock_stderr.read.return_value = b""
-        mock_ssh_client.exec_command.return_value = (None, mock_stdout, mock_stderr)
-        
-        router_interface.connect()
-        
-        # Act
-        result = router_interface.execute_command("test command")
-        
-        # Assert
-        assert result == "command output"
-        mock_ssh_client.exec_command.assert_called_with("test command")
-    
-    @patch('paramiko.SSHClient')
-    def test_execute_command_handles_command_errors(self, mock_ssh_class, router_interface, mock_ssh_client):
+        mock_result = Mock()
+        mock_result.stdout = "command output"
+        mock_result.stderr = ""
+        mock_result.returncode = 0
+
+        router_interface.is_connected = True
+        router_interface.ssh_client = mock_ssh_client
+
+        with patch.object(mock_ssh_client, 'run', new_callable=AsyncMock) as mock_run:
+            mock_run.return_value = mock_result
+
+            # Act
+            result = await router_interface.execute_command("test command")
+
+            # Assert
+            assert result == "command output"
+            mock_run.assert_called_once_with("test command", timeout=router_interface.command_timeout)
+
+    @pytest.mark.asyncio
+    async def test_execute_command_handles_command_errors(self, router_interface, mock_ssh_client):
         """Test that execute_command handles command errors"""
         # Arrange
-        mock_ssh_class.return_value = mock_ssh_client
-        mock_stdout = Mock()
-        mock_stdout.read.return_value = b""
-        mock_stderr = Mock()
-        mock_stderr.read.return_value = b"command error"
-        mock_ssh_client.exec_command.return_value = (None, mock_stdout, mock_stderr)
-        
-        router_interface.connect()
-        
-        # Act & Assert
-        with pytest.raises(RouterConnectionError):
-            router_interface.execute_command("failing command")
-    
-    def test_execute_command_requires_connection(self, router_interface):
+        mock_result = Mock()
+        mock_result.stdout = ""
+        mock_result.stderr = "command error"
+        mock_result.returncode = 1
+
+        router_interface.is_connected = True
+        router_interface.ssh_client = mock_ssh_client
+
+        with patch.object(mock_ssh_client, 'run', new_callable=AsyncMock) as mock_run:
+            mock_run.return_value = mock_result
+
+            # Act & Assert
+            with pytest.raises(RouterConnectionError):
+                await router_interface.execute_command("failing command")
+
+    @pytest.mark.asyncio
+    async def test_execute_command_requires_connection(self, router_interface):
         """Test that execute_command requires active connection"""
+        # Arrange
+        router_interface.is_connected = False
+
         # Act & Assert
         with pytest.raises(RouterConnectionError):
-            router_interface.execute_command("test command")
-    
-    @patch('paramiko.SSHClient')
-    def test_get_router_info_retrieves_system_information(self, mock_ssh_class, router_interface, mock_ssh_client):
-        """Test that get_router_info retrieves router system information"""
+            await router_interface.execute_command("test command")
+
+    @pytest.mark.asyncio
+    async def test_get_router_status_retrieves_system_information(self, router_interface):
+        """Test that get_router_status retrieves router system information"""
         # Arrange
-        mock_ssh_class.return_value = mock_ssh_client
-        mock_stdout = Mock()
-        mock_stdout.read.return_value = b"Router Model: AC1900\nFirmware: 1.2.3"
-        mock_stderr = Mock()
-        mock_stderr.read.return_value = b""
-        mock_ssh_client.exec_command.return_value = (None, mock_stdout, mock_stderr)
-        
-        router_interface.connect()
-        
-        # Act
-        info = router_interface.get_router_info()
-        
-        # Assert
-        assert info is not None
-        assert isinstance(info, dict)
-        assert 'model' in info
-        assert 'firmware' in info
-    
-    @patch('paramiko.SSHClient')
-    def test_enable_monitor_mode_configures_wifi_monitoring(self, mock_ssh_class, router_interface, mock_ssh_client):
-        """Test that enable_monitor_mode configures WiFi monitoring"""
+        with patch.object(router_interface, 'execute_command', new_callable=AsyncMock) as mock_exec:
+            with patch.object(router_interface, '_parse_status_response', return_value={
+                'cpu_usage': 25.5,
+                'memory_usage': 60.2,
+                'wifi_status': 'active',
+            }) as mock_parse:
+                mock_exec.return_value = "status response"
+
+                # Act
+                info = await router_interface.get_router_status()
+
+                # Assert
+                assert info is not None
+                assert isinstance(info, dict)
+                assert 'cpu_usage' in info
+                assert 'memory_usage' in info
+
+    @pytest.mark.asyncio
+    async def test_health_check_returns_true_when_healthy(self, router_interface):
+        """Test that health_check returns True when router is healthy"""
         # Arrange
-        mock_ssh_class.return_value = mock_ssh_client
-        mock_stdout = Mock()
-        mock_stdout.read.return_value = b"Monitor mode enabled"
-        mock_stderr = Mock()
-        mock_stderr.read.return_value = b""
-        mock_ssh_client.exec_command.return_value = (None, mock_stdout, mock_stderr)
-        
-        router_interface.connect()
-        
-        # Act
-        result = router_interface.enable_monitor_mode("wlan0")
-        
-        # Assert
-        assert result is True
-        mock_ssh_client.exec_command.assert_called()
-    
-    @patch('paramiko.SSHClient')
-    def test_disable_monitor_mode_disables_wifi_monitoring(self, mock_ssh_class, router_interface, mock_ssh_client):
-        """Test that disable_monitor_mode disables WiFi monitoring"""
-        # Arrange
-        mock_ssh_class.return_value = mock_ssh_client
-        mock_stdout = Mock()
-        mock_stdout.read.return_value = b"Monitor mode disabled"
-        mock_stderr = Mock()
-        mock_stderr.read.return_value = b""
-        mock_ssh_client.exec_command.return_value = (None, mock_stdout, mock_stderr)
-        
-        router_interface.connect()
-        
-        # Act
-        result = router_interface.disable_monitor_mode("wlan0")
-        
-        # Assert
-        assert result is True
-        mock_ssh_client.exec_command.assert_called()
-    
-    @patch('paramiko.SSHClient')
-    def test_interface_supports_context_manager(self, mock_ssh_class, router_interface, mock_ssh_client):
-        """Test that router interface supports context manager protocol"""
-        # Arrange
-        mock_ssh_class.return_value = mock_ssh_client
-        
-        # Act
-        with router_interface as interface:
+        with patch.object(router_interface, 'execute_command', new_callable=AsyncMock) as mock_exec:
+            mock_exec.return_value = "pong"
+
+            # Act
+            result = await router_interface.health_check()
+
             # Assert
-            assert interface.is_connected is True
-        
-        # Assert - connection should be closed after context
-        assert router_interface.is_connected is False
-        mock_ssh_client.close.assert_called_once()
-    
+            assert result is True
+
+    @pytest.mark.asyncio
+    async def test_configure_csi_monitoring_configures_wifi_monitoring(self, router_interface):
+        """Test that configure_csi_monitoring configures WiFi monitoring"""
+        # Arrange
+        config = {'channel': 6, 'bandwidth': 20, 'sample_rate': 100}
+
+        with patch.object(router_interface, 'execute_command', new_callable=AsyncMock) as mock_exec:
+            mock_exec.return_value = "CSI monitoring configured"
+
+            # Act
+            result = await router_interface.configure_csi_monitoring(config)
+
+            # Assert
+            assert result is True
+            mock_exec.assert_called_once()
+
     def test_interface_validates_configuration(self):
         """Test that router interface validates configuration parameters"""
-        # Arrange
+        # Arrange — missing required 'host' field
         invalid_config = {
-            'router_ip': '',  # Invalid IP
             'username': 'admin',
-            'password': 'password'
+            'password': 'password',
+            'port': 22,
         }
-        
+
         # Act & Assert
         with pytest.raises(ValueError):
             RouterInterface(invalid_config)
-    
-    @patch('paramiko.SSHClient')
-    def test_interface_implements_retry_logic(self, mock_ssh_class, router_interface, mock_ssh_client):
-        """Test that interface implements retry logic for failed operations"""
+
+    @pytest.mark.asyncio
+    async def test_interface_implements_retry_logic(self, router_interface, mock_ssh_client):
+        """Test that interface implements retry logic for failed command operations"""
         # Arrange
-        mock_ssh_class.return_value = mock_ssh_client
-        mock_ssh_client.connect.side_effect = [Exception("Temp failure"), None]  # Fail once, then succeed
-        
-        # Act
-        result = router_interface.connect()
-        
-        # Assert
-        assert result is True
-        assert mock_ssh_client.connect.call_count == 2  # Should retry once
+        mock_success = Mock()
+        mock_success.stdout = "success"
+        mock_success.stderr = ""
+        mock_success.returncode = 0
+
+        router_interface.is_connected = True
+        router_interface.ssh_client = mock_ssh_client
+
+        with patch.object(mock_ssh_client, 'run', new_callable=AsyncMock) as mock_run:
+            # Fail twice with ConnectionError (triggers retry), then succeed
+            mock_run.side_effect = [
+                ConnectionError("Temp failure"),
+                ConnectionError("Temp failure"),
+                mock_success
+            ]
+
+            # Act
+            result = await router_interface.execute_command("test command")
+
+            # Assert
+            assert result == "success"
+            assert mock_run.call_count == 3

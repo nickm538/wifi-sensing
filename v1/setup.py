@@ -9,9 +9,10 @@ import os
 import sys
 from pathlib import Path
 
+here = Path(__file__).parent.absolute()
+
 # Ensure we're in the right directory
 if __name__ == "__main__":
-    here = Path(__file__).parent.absolute()
     os.chdir(here)
 
 # Read version from src/__init__.py

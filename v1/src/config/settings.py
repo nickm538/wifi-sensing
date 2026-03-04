@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     
     # Application settings
     app_name: str = Field(default="WiFi-DensePose API", description="Application name")
-    version: str = Field(default="1.0.0", description="Application version")
+    version: str = Field(default="1.2.0", description="Application version")
     environment: str = Field(default="development", description="Environment (development, staging, production)")
     debug: bool = Field(default=False, description="Debug mode")
     
@@ -165,7 +165,7 @@ class Settings(BaseSettings):
     @classmethod
     def validate_environment(cls, v):
         """Validate environment setting."""
-        allowed_environments = ["development", "staging", "production"]
+        allowed_environments = ["development", "staging", "production", "testing"]
         if v not in allowed_environments:
             raise ValueError(f"Environment must be one of: {allowed_environments}")
         return v
