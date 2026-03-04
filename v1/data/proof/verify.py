@@ -31,6 +31,7 @@ Usage:
   python verify.py --verbose        # Show detailed feature statistics
   python verify.py --audit          # Scan codebase for mock/random patterns
   python verify.py --generate-hash  # Generate and print the expected hash
+  python verify.py --no-regenerate-reference  # Use checked-in sample file only
 """
 
 import hashlib
@@ -40,6 +41,7 @@ import os
 import struct
 import sys
 import argparse
+import subprocess
 import time
 from datetime import datetime, timezone
 
@@ -75,6 +77,11 @@ PROCESSOR_CONFIG = {
 # We process a representative subset to keep verification fast while
 # still covering temporal dynamics (Doppler requires history).
 VERIFICATION_FRAME_COUNT = 100  # First 100 frames = 1 second
+
+# Canonicalization precision used before hashing feature arrays.
+# This keeps the proof stable across tiny floating-point noise while still
+# making meaningful pipeline changes detectable via hash mismatch.
+HASH_DECIMALS = 12
 
 
 def print_banner():
@@ -189,6 +196,9 @@ def features_to_bytes(features):
         features.power_spectral_density,
     ]:
         flat = np.asarray(array, dtype=np.float64).ravel()
+        # Quantize values to stabilize hashing across negligible numeric drift
+        # (e.g., minor BLAS/CPU differences) while preserving determinism.
+        flat = np.round(flat, decimals=HASH_DECIMALS)
         # Pack as little-endian double (8 bytes each)
         parts.append(struct.pack(f"<{len(flat)}d", *flat))
 
@@ -384,6 +394,13 @@ def audit_codebase(base_dir=None):
     return findings
 
 
+
+
+def regenerate_reference_signal():
+    """Regenerate deterministic reference signal before verification."""
+    generator_path = os.path.join(SCRIPT_DIR, "generate_reference_signal.py")
+    subprocess.run([sys.executable, generator_path], check=True, stdout=subprocess.DEVNULL)
+
 def main():
     """Main verification entry point."""
     parser = argparse.ArgumentParser(
@@ -404,12 +421,25 @@ def main():
         action="store_true",
         help="Scan production codebase for mock/random patterns",
     )
+    parser.add_argument(
+        "--no-regenerate-reference",
+        action="store_true",
+        help="Use checked-in sample_csi_data.json without regenerating",
+    )
     args = parser.parse_args()
 
     print_banner()
 
     # Locate data file
     data_path = os.path.join(SCRIPT_DIR, "sample_csi_data.json")
+
+    if args.no_regenerate_reference:
+        print("  Reference signal regeneration: DISABLED (--no-regenerate-reference)")
+    else:
+        print("  Regenerating deterministic reference signal...")
+        regenerate_reference_signal()
+        print("  Reference signal regenerated from generate_reference_signal.py")
+    print()
     hash_path = os.path.join(SCRIPT_DIR, "expected_features.sha256")
 
     # ---------------------------------------------------------------
