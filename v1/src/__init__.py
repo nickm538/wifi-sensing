@@ -44,82 +44,78 @@ __download_url__ = "https://github.com/wifi-densepose/wifi-densepose/archive/mai
 # Version info tuple
 __version_info__ = tuple(int(x) for x in __version__.split('.'))
 
-# Import key components for easy access
-try:
-    from src.app import app
-    from src.config.settings import get_settings, Settings
-    from src.logger import setup_logging, get_logger
-    
-    # Core components
-    from src.core.csi_processor import CSIProcessor
-    from src.core.phase_sanitizer import PhaseSanitizer
-    from src.core.router_interface import RouterInterface
-    
-    # Services
-    from src.services.orchestrator import ServiceOrchestrator
-    from src.services.health_check import HealthCheckService
-    from src.services.metrics import MetricsService
-    
-    # Database
-    from src.database.connection import get_database_manager
-    from src.database.models import (
-        Device, Session, CSIData, PoseDetection, 
-        SystemMetric, AuditLog
-    )
-    
-    __all__ = [
-        # Core app
-        'app',
-        'get_settings',
-        'Settings',
-        'setup_logging',
-        'get_logger',
-        
-        # Core processing
-        'CSIProcessor',
-        'PhaseSanitizer',
-        'RouterInterface',
-        
-        # Services
-        'ServiceOrchestrator',
-        'HealthCheckService',
-        'MetricsService',
-        
-        # Database
-        'get_database_manager',
-        'Device',
-        'Session',
-        'CSIData',
-        'PoseDetection',
-        'SystemMetric',
-        'AuditLog',
-        
-        # Metadata
-        '__version__',
-        '__version_info__',
-        '__author__',
-        '__email__',
-        '__license__',
-        '__copyright__',
-    ]
+from importlib import import_module
 
-except ImportError as e:
-    # Handle import errors gracefully during package installation
-    import warnings
-    warnings.warn(
-        f"Some components could not be imported: {e}. "
-        "This is normal during package installation.",
-        ImportWarning
-    )
-    
-    __all__ = [
-        '__version__',
-        '__version_info__',
-        '__author__',
-        '__email__',
-        '__license__',
-        '__copyright__',
-    ]
+# Export common symbols via lazy imports to avoid loading runtime configuration
+# (e.g., environment-backed settings) on package import.
+__all__ = [
+    # Core app
+    'app',
+    'get_settings',
+    'Settings',
+    'setup_logging',
+    'get_logger',
+
+    # Core processing
+    'CSIProcessor',
+    'PhaseSanitizer',
+    'RouterInterface',
+
+    # Services
+    'ServiceOrchestrator',
+    'HealthCheckService',
+    'MetricsService',
+
+    # Database
+    'get_database_manager',
+    'Device',
+    'Session',
+    'CSIData',
+    'PoseDetection',
+    'SystemMetric',
+    'AuditLog',
+
+    # Metadata
+    '__version__',
+    '__version_info__',
+    '__author__',
+    '__email__',
+    '__license__',
+    '__copyright__',
+]
+
+
+_LAZY_IMPORTS = {
+    'app': ('src.app', 'app'),
+    'get_settings': ('src.config.settings', 'get_settings'),
+    'Settings': ('src.config.settings', 'Settings'),
+    'setup_logging': ('src.logger', 'setup_logging'),
+    'get_logger': ('src.logger', 'get_logger'),
+    'CSIProcessor': ('src.core.csi_processor', 'CSIProcessor'),
+    'PhaseSanitizer': ('src.core.phase_sanitizer', 'PhaseSanitizer'),
+    'RouterInterface': ('src.core.router_interface', 'RouterInterface'),
+    'ServiceOrchestrator': ('src.services.orchestrator', 'ServiceOrchestrator'),
+    'HealthCheckService': ('src.services.health_check', 'HealthCheckService'),
+    'MetricsService': ('src.services.metrics', 'MetricsService'),
+    'get_database_manager': ('src.database.connection', 'get_database_manager'),
+    'Device': ('src.database.models', 'Device'),
+    'Session': ('src.database.models', 'Session'),
+    'CSIData': ('src.database.models', 'CSIData'),
+    'PoseDetection': ('src.database.models', 'PoseDetection'),
+    'SystemMetric': ('src.database.models', 'SystemMetric'),
+    'AuditLog': ('src.database.models', 'AuditLog'),
+}
+
+
+def __getattr__(name):
+    """Lazily import optional runtime symbols from their source modules."""
+    if name in _LAZY_IMPORTS:
+        module_name, attr_name = _LAZY_IMPORTS[name]
+        module = import_module(module_name)
+        value = getattr(module, attr_name)
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
 
 def get_version():
